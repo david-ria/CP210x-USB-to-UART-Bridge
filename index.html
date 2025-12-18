@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NextPM Reader</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+        .card { background: white; padding: 20px; margin: 10px auto; border-radius: 10px; max-width: 400px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h2 { margin: 0; color: #333; }
+        .value { font-size: 2.5em; font-weight: bold; color: #2c3e50; }
+        .unit { font-size: 0.5em; color: #7f8c8d; }
+        button { background: #007bff; color: white; border: none; padding: 15px 30px; font-size: 1.2em; border-radius: 5px; cursor: pointer; margin-bottom: 20px; }
+        button:disabled { background: #ccc; }
+        #status { color: #666; margin-bottom: 20px; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <h1>Tera Sensor NextPM</h1>
+    <button id="connectBtn">🔌 Connecter le capteur</button>
+    <div id="status">En attente...</div>
+
+    <div class="card">
+        <h2>PM 1.0</h2>
+        <div class="value" id="pm1">-- <span class="unit">µg/m³</span></div>
+    </div>
+    <div class="card">
+        <h2>PM 2.5</h2>
+        <div class="value" id="pm25">-- <span class="unit">µg/m³</span></div>
+    </div>
+    <div class="card">
+        <h2>PM 10</h2>
+        <div class="value" id="pm10">-- <span class="unit">µg/m³</span></div>
+    </div>
+
+    <script>
+        let port;
+        let reader;
+        let writer;
+        let keepReading = false;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const statusDiv = document.getElementById('status');
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                // Demande l'accès au port USB
+                port = await navigator.serial.requestPort();
+                
+                // Configuration NextPM: 115200 bauds
+                await port.open({ baudRate: 115200 });
+                
+                statusDiv.innerText = "Connecté ! Lecture en cours...";
+                connectBtn.disabled = true;
+                keepReading = true;
+
+                // Lancer la boucle d'envoi et de lecture
+                readLoop();
+                writeLoop();
+
+            } catch (error) {
+                statusDiv.innerText = "Erreur: " + error;
+            }
+        });
+
+        async function writeLoop() {
+            const writer = port.writable.getWriter();
+            // Commande NextPM: 0x81 0x11 0x6E
+            const cmd = new Uint8Array([0x81, 0x11, 0x6E]);
+
+            while (keepReading) {
+                try {
+                    await writer.write(cmd);
+                    console.log("Commande envoyée");
+                    // Attendre 5 secondes
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                } catch (e) {
+                    console.error(e);
+                    break;
+                }
+            }
+            writer.releaseLock();
+        }
+
+        async function readLoop() {
+            const reader = port.readable.getReader();
+            let buffer = [];
+
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    // Ajouter les données reçues au tampon
+                    for (let i = 0; i < value.length; i++) {
+                        buffer.push(value[i]);
+                    }
+
+                    // Tenter de trouver une trame complète (16 octets commençant par 0x81 0x11)
+                    while (buffer.length >= 16) {
+                        // Chercher l'entête
+                        if (buffer[0] === 0x81 && buffer[1] === 0x11) {
+                            // On a probablement une trame valide
+                            const frame = buffer.slice(0, 16);
+                            parseData(frame);
+                            // Retirer la trame traitée
+                            buffer = buffer.slice(16);
+                        } else {
+                            // Mauvais entête, on décale d'un cran
+                            buffer.shift();
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error(error);
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+        function parseData(data) {
+            // Conversion Hex -> Décimal
+            // PM1.0 (Octets 3 et 4)
+            const pm1Val = (data[3] << 8) | data[4];
+            // PM2.5 (Octets 5 et 6)
+            const pm25Val = (data[5] << 8) | data[6];
+            // PM10 (Octets 7 et 8)
+            const pm10Val = (data[7] << 8) | data[8];
+
+            document.getElementById('pm1').innerHTML = pm1Val + ' <span class="unit">µg/m³</span>';
+            document.getElementById('pm25').innerHTML = pm25Val + ' <span class="unit">µg/m³</span>';
+            document.getElementById('pm10').innerHTML = pm10Val + ' <span class="unit">µg/m³</span>';
+        }
+    </script>
+</body>
+</html>
